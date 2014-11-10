@@ -8,6 +8,23 @@ from flask.ext.wtf import Form #class form
 from wtforms import StringField, SubmitField #fields 
 from wtforms.validators import Required #param required
 from flask.ext.sqlalchemy import SQLAlchemy 
+from flask.ext.script import Shell #adding a shell context
+from flask.ext.migrate import Migrate, MigrateCommand
+import os
+
+
+
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'this_is_a_test_string' #CSRF protection --> should be stored in an enviornment variable rather than embedded in the actual code
+
+#initializations
+manager=Manager(app) #initiate manager for server
+bootstrap=Bootstrap(app) #initiate bootstrap for styling
+moment=Moment(app) #initiate moment for time
+db=SQLAlchemy(app) #initiate db
+
+migrate=Migrate(app,db) #initiate migrations
 
 
 #adding data abstraction layer using sqlalchemy 
@@ -17,21 +34,13 @@ app.config['SQLALCHEMY_DATABASE_URI'] =\
 
 app.config['SQLALCHEMY_COMMIT_ON_TEARDOWN'] = True
 
-
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'this_is_a_test_string' #CSRF protection --> should be stored in an enviornment variable rather than embedded in the actual code
-
-manager=Manager(app) #initiate manager for server
-bootstrap=Bootstrap(app) #initiate bootstrap for styling
-moment=Moment(app) #initiate moment for time
-db=SQLAlchemy(app) #initiate db
-
-
 #models for db
 class Role(db.Model):
 	__tablename__='roles'
 	id=db.Column(db.Integer, primary_key=True)
 	name=db.Column(db.String(64), unique=True)
+	#relationships
+	users=db.relationship('User', backref='role',lazy='dynamic')
 
 	def __repr_(self):
 		return '<Role %r>' % self.name
@@ -40,6 +49,8 @@ class User(db.Model):
 	__tablename__='users'
 	id=db.Column(db.Integer, primary_key=True)
 	username=db.Column(db.String(64),unique=True,index=True)
+	role_id=db.Column(db.Integer,db.ForeignKey('roles.id'))
+
 
 	def __repr__(self):
  		return '<User %r>' % self.username
@@ -56,15 +67,20 @@ class NameForm(Form):
 @app.route('/', methods=['GET', 'POST'])
 def index():
 	form = NameForm()
- 	if form.validate_on_submit():
- 		old_name = session.get('name')
- 		if old_name is not None and old_name != form.name.data:
- 			flash('Looks like you have changed your name!')
-		session['name'] = form.name.data
+	if form.validate_on_submit():
+ 		user = User.query.filter_by(username=form.name.data).first()
+ 		if user is None:
+ 			user = User(username = form.name.data)
+			db.session.add(user)
+			session['known'] = False
+		else:
+ 			session['known'] = True
+ 		session['name'] = form.name.data
 		form.name.data = ''
- 		return redirect(url_for('index'))
-	return render_template('index.html', form = form, name = session.get('name'))
-
+		return redirect(url_for('index'))
+ 	return render_template('index.html',
+ form = form, name = session.get('name'),
+ known = session.get('known', False))
 
 #The code below doesn't work due to the fact that the information
 # @app.route('/', methods=['GET', 'POST']) #need to specift post otherwise defaulted to get requests only
@@ -90,6 +106,15 @@ def page_not_found(e):
 @app.errorhandler(500)
 def internal_server_error(e):
  return render_template('500.html'), 500
+
+#adding a shell context
+def make_shell_context():
+	return dict(app=app, db=db, User=User, Role=Role)
+
+
+#commands
+manager.add_command("shell", Shell(make_context=make_shell_context))
+manager.add_command('db',MigrateCommand) #expose migration commands
 
 
 #Application start
